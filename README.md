@@ -15,7 +15,7 @@ An AI-powered intraday scalping framework for NSE/BSE Indian stock markets that:
 
 - **Identifies** the top 5 momentum stocks for Morning (9:15–10:45) and Afternoon (13:30–15:15) sessions
 - **Scores** each stock across 7 weighted parameters using technical and sentiment analysis
-- **Generates** precise trade setups (Entry, TP1, TP2, Stop-Loss) using ATR-based calculations
+- **Generates** precise trade setups (Entry, TP, Stop-Loss) using ATR-based calculations
 - **Simulates** paper trades with full Angel One fee structure, lifecycle management, and daily P&L reporting
 - **Visualises** performance via a Streamlit dashboard
 
@@ -44,7 +44,7 @@ An AI-powered intraday scalping framework for NSE/BSE Indian stock markets that:
              │ Top 5 stocks + direction (LONG/SHORT)
              ▼
   ┌─────────────────────┐
-  │  Step 3: Strategy   │  ← ATR-based Entry / SL / TP1 / TP2
+  │  Step 3: Strategy   │  ← ATR-based Entry / SL / TP
   │  Engine             │  ← Trade card generation
   └──────────┬──────────┘
              │ Trade setups
@@ -95,7 +95,7 @@ ai-scalping-system/
 │   ├── __init__.py
 │   ├── step1_universe_filter.py        ← Stock universe + pre-market scan
 │   ├── step2_scoring_engine.py         ← AI scoring engine (7 parameters)
-│   ├── step3_strategy_engine.py        ← Scalping strategy (Entry/TP1/TP2/SL)
+│   ├── step3_strategy_engine.py        ← Scalping strategy (Entry/TP/SL)
 │   ├── step4_paper_trader.py           ← Paper trade simulator + fee calc
 │   └── dashboard.py                    ← Streamlit P&L dashboard
 ├── data/
@@ -169,10 +169,8 @@ cp .env.example .env
 | Capital per trade | ₹20,000 (20% of total) |
 | Max risk per trade | ₹1,000 (1% of capital) |
 | Daily loss limit | ₹2,000 (2% of capital) |
-| SL distance | 0.3%–0.8% from entry (ATR-clamped) |
-| TP1 exit | 50% quantity at 1× ATR |
-| TP2 exit | Remaining 50% at 2.5× ATR |
-| Breakeven SL | SL moved to entry after TP1 hit |
+| SL distance | 0.4%–1.0% from entry (ATR-clamped) |
+| TP exit | Full position at 1× ATR |
 | No new trades | After 15:00 IST |
 | EOD square-off | 15:15 IST |
 
@@ -189,11 +187,9 @@ cp .env.example .env
 
 ### Trade Lifecycle
 ```
-OPEN → price hits TP1 → PARTIAL (50% booked, SL → entry)
-                      → price hits TP2 → CLOSED (WIN)
-                      → price hits SL  → CLOSED (BREAK-EVEN)
-     → price hits SL  → CLOSED (LOSS)
-     → 15:15 IST      → EOD SQUARE-OFF
+OPEN → price hits TP → CLOSED (WIN)
+     → price hits SL → CLOSED (LOSS)
+     → 15:15 IST     → EOD SQUARE-OFF
 ```
 
 ---

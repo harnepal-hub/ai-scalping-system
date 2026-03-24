@@ -2,7 +2,7 @@
 Step 4 — Paper Trade Simulator & P&L Tracker
 =============================================
 Simulates intraday scalping trades with full Angel One fee calculation,
-trade lifecycle management (OPEN → PARTIAL → CLOSED), and daily P&L reporting.
+trade lifecycle management (OPEN → CLOSED), and daily P&L reporting.
 
 Fee structure (Angel One intraday):
   Brokerage      : ₹20 per leg (flat)
@@ -13,9 +13,8 @@ Fee structure (Angel One intraday):
   GST            : 18% on (brokerage + transaction)
 
 Trade states:
-  OPEN    → Active trade, both legs open
-  PARTIAL → TP1 hit; 50% qty booked, SL moved to entry (breakeven)
-  CLOSED  → Fully closed (TP2 / SL / EOD square-off)
+  OPEN   → Active trade
+  CLOSED → Fully closed (TP / SL / EOD square-off)
 """
 
 import sys
@@ -70,7 +69,7 @@ except Exception:
 TRADE_CSV_COLUMNS = [
     "date", "session", "stock", "symbol_token", "direction",
     "entry_price", "exit_price", "qty",
-    "sl", "tp1", "tp2", "exit_reason",
+    "sl", "tp", "exit_reason",
     "gross_pnl", "fees", "net_pnl",
     "entry_time", "exit_time",
     "composite_score", "atr", "rr_ratio", "capital_after",
@@ -78,7 +77,6 @@ TRADE_CSV_COLUMNS = [
 
 # ── Trade states ───────────────────────────────────────────────────────────────
 STATE_OPEN = "OPEN"
-STATE_PARTIAL = "PARTIAL"
 STATE_CLOSED = "CLOSED"
 
 
@@ -122,8 +120,8 @@ def calculate_charges(buy_price: float, sell_price: float, qty: int) -> float:
 
 class PaperTrader:
     """
-    Simulates intraday paper trades with realistic fee calculation, partial
-    exits at TP1, breakeven SL adjustment, and end-of-day square-off.
+    Simulates intraday paper trades with realistic fee calculation and
+    end-of-day square-off. The full position exits at the single TP level.
 
     Parameters
     ----------
@@ -145,8 +143,7 @@ class PaperTrader:
                    direction: str,
                    entry: float,
                    sl: float,
-                   tp1: float,
-                   tp2: float,
+                   tp: float,
                    qty: int,
                    session: str = "morning",
                    composite_score: float = 0.0,
@@ -166,10 +163,8 @@ class PaperTrader:
             Entry price in ₹.
         sl : float
             Stop-loss price in ₹.
-        tp1 : float
-            Take-Profit 1 price in ₹ (50% exit).
-        tp2 : float
-            Take-Profit 2 price in ₹ (remaining 50% exit).
+        tp : float
+            Take-Profit price in ₹ (full position exits here).
         qty : int
             Total number of shares to trade.
         session : str
@@ -206,10 +201,8 @@ class PaperTrader:
             "entry": entry,
             "sl": sl,
             "original_sl": sl,
-            "tp1": tp1,
-            "tp2": tp2,
+            "tp": tp,
             "qty": qty,
-            "remaining_qty": qty,
             "session": session,
             "state": STATE_OPEN,
             "entry_time": datetime.now(),
@@ -217,21 +210,18 @@ class PaperTrader:
             "composite_score": composite_score,
             "atr": atr,
             "rr_ratio": rr_ratio,
-            "partial_exit_price": None,
-            "partial_pnl": 0.0,
-            "partial_fees": 0.0,
         }
 
         self.open_trades[stock] = trade
         logger.info(
             f"[OPEN] {stock} {direction} @ ₹{entry:.2f}  "
-            f"SL={sl:.2f}  TP1={tp1:.2f}  TP2={tp2:.2f}  Qty={qty}"
+            f"SL={sl:.2f}  TP={tp:.2f}  Qty={qty}"
         )
         return True
 
     def update_prices(self, stock: str, current_price: float) -> Optional[str]:
         """
-        Update the price for an open trade and trigger TP1 / SL if hit.
+        Update the price for an open trade and trigger TP / SL if hit.
 
         Call this once per 1-min or 5-min candle close.
 
@@ -245,29 +235,20 @@ class PaperTrader:
         Returns
         -------
         str or None
-            "TP1", "TP2", "SL" if a level was hit, else None.
+            "TP" or "SL" if a level was hit, else None.
         """
         if stock not in self.open_trades:
             return None
 
         trade = self.open_trades[stock]
         direction = trade["direction"]
-        state = trade["state"]
 
-        if state == STATE_OPEN:
-            # Check TP1
-            if _hit_target(direction, current_price, trade["tp1"], "LONG_TP"):
-                return self._handle_tp1(stock, current_price)
-            # Check SL
-            if _hit_stop(direction, current_price, trade["sl"]):
-                return self.close_trade(stock, current_price, "SL")
-
-        elif state == STATE_PARTIAL:
-            # After TP1: SL moved to entry (breakeven)
-            if _hit_target(direction, current_price, trade["tp2"], "LONG_TP"):
-                return self.close_trade(stock, current_price, "TP2")
-            if _hit_stop(direction, current_price, trade["sl"]):
-                return self.close_trade(stock, current_price, "SL_BE")  # breakeven
+        # Check TP (full exit)
+        if _hit_target(direction, current_price, trade["tp"], "LONG_TP"):
+            return self.close_trade(stock, current_price, "TP")
+        # Check SL
+        if _hit_stop(direction, current_price, trade["sl"]):
+            return self.close_trade(stock, current_price, "SL")
 
         return None
 
@@ -283,7 +264,7 @@ class PaperTrader:
         exit_price : float
             Exit price in ₹.
         reason : str
-            Reason code: "TP1", "TP2", "SL", "SL_BE", "EOD", "MANUAL".
+            Reason code: "TP", "SL", "EOD", "MANUAL".
 
         Returns
         -------
@@ -297,33 +278,21 @@ class PaperTrader:
         trade = self.open_trades.pop(stock)
         direction = trade["direction"]
         entry = trade["entry"]
-        full_qty = trade["qty"]
-        remaining_qty = trade["remaining_qty"]
-        partial_qty = full_qty - remaining_qty
+        qty = trade["qty"]
 
-        # ── Gross P&L: sum partial (TP1) + remaining (final) ─────────────────
+        # ── Gross P&L: full qty exits at exit_price ───────────────────────────
         if direction == "LONG":
-            gross_remaining = (exit_price - entry) * remaining_qty
+            gross = (exit_price - entry) * qty
         else:
-            gross_remaining = (entry - exit_price) * remaining_qty
-        total_gross = round(trade["partial_pnl"] + gross_remaining, 2)
+            gross = (entry - exit_price) * qty
+        total_gross = round(gross, 2)
 
-        # ── Fees: calculate ONCE for the full round-trip position.
-        #    For split trades use a weighted average exit price so the buy
-        #    brokerage and stamp duty are not double-counted.           ─────────
-        partial_exit_price = trade.get("partial_exit_price")
-        if partial_qty > 0 and partial_exit_price is not None:
-            # Weighted average exit across both legs
-            avg_exit = (partial_exit_price * partial_qty
-                        + exit_price * remaining_qty) / full_qty
-        else:
-            avg_exit = exit_price
-
+        # ── Fees ──────────────────────────────────────────────────────────────
         if direction == "LONG":
-            buy_p, sell_p = entry, round(avg_exit, 4)
+            buy_p, sell_p = entry, exit_price
         else:
-            buy_p, sell_p = round(avg_exit, 4), entry
-        total_fees = calculate_charges(buy_p, sell_p, full_qty)
+            buy_p, sell_p = exit_price, entry
+        total_fees = calculate_charges(buy_p, sell_p, qty)
 
         net_pnl = round(total_gross - total_fees, 2)
 
@@ -340,10 +309,9 @@ class PaperTrader:
             "direction": direction,
             "entry_price": entry,
             "exit_price": exit_price,
-            "qty": full_qty,
+            "qty": qty,
             "sl": trade["original_sl"],
-            "tp1": trade["tp1"],
-            "tp2": trade["tp2"],
+            "tp": trade["tp"],
             "exit_reason": reason,
             "gross_pnl": total_gross,
             "fees": total_fees,
@@ -376,8 +344,8 @@ class PaperTrader:
         stocks = list(self.open_trades.keys())
         for stock in stocks:
             trade = self.open_trades[stock]
-            # Use TP1 as proxy for last price if no live price available
-            last_price = trade.get("last_price", trade["tp1"])
+            # Use TP as proxy for last price if no live price available
+            last_price = trade.get("last_price", trade["tp"])
             self.close_trade(stock, last_price, "EOD")
             logger.info(f"[EOD] {stock} squared off at ₹{last_price:.2f}")
 
@@ -555,37 +523,7 @@ class PaperTrader:
                 self.capital = float(last_capital)
 
     # ── Internal helpers ──────────────────────────────────────────────────────
-
-    def _handle_tp1(self, stock: str, current_price: float) -> str:
-        """
-        Process a TP1 hit: record 50% partial gross P&L and move SL to
-        entry (breakeven).  Fees for the full position are calculated once
-        when the trade is finally closed.
-        """
-        trade = self.open_trades[stock]
-        direction = trade["direction"]
-        entry = trade["entry"]
-        full_qty = trade["qty"]
-        half_qty = max(1, full_qty // 2)
-
-        # Gross P&L for first 50% (fees deferred to final close)
-        if direction == "LONG":
-            gross = (current_price - entry) * half_qty
-        else:
-            gross = (entry - current_price) * half_qty
-
-        trade["partial_pnl"] = round(gross, 2)
-        trade["partial_fees"] = 0.0   # fees charged once at final close
-        trade["partial_exit_price"] = current_price
-        trade["remaining_qty"] = full_qty - half_qty
-        trade["sl"] = entry   # Move SL to breakeven
-        trade["state"] = STATE_PARTIAL
-
-        logger.info(
-            f"[TP1] {stock}  Exit 50% ({half_qty} shares) @ ₹{current_price:.2f}  "
-            f"Gross=₹{gross:+.2f}  SL moved to breakeven ₹{entry:.2f}"
-        )
-        return "TP1"
+    # (reserved for future use)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -617,15 +555,14 @@ if __name__ == "__main__":
     trader = PaperTrader(capital=100_000)
 
     # Simulate 3 trades
-    trader.open_trade("RELIANCE.NS", "LONG",  2450.0, 2435.25, 2453.5, 2458.75, 8,  "morning")
-    trader.open_trade("HDFCBANK.NS", "LONG",  1680.0, 1666.60, 1682.0, 1685.0,  11, "morning")
-    trader.open_trade("TCS.NS",      "LONG",  3890.0, 3867.50, 3893.0, 3898.0,  5,  "afternoon")
+    trader.open_trade("RELIANCE.NS", "LONG",  2450.0, 2435.25, 2459.50, 8,  "morning")
+    trader.open_trade("HDFCBANK.NS", "LONG",  1680.0, 1666.60, 1686.50, 11, "morning")
+    trader.open_trade("TCS.NS",      "LONG",  3890.0, 3867.50, 3904.00, 5,  "afternoon")
 
     # Simulate price movements
-    trader.update_prices("RELIANCE.NS", 2454.0)   # TP1 hit
-    trader.update_prices("RELIANCE.NS", 2459.0)   # TP2 hit
-    trader.update_prices("HDFCBANK.NS", 1664.0)   # SL hit
-    trader.update_prices("TCS.NS",      3921.0)   # TP2 hit
+    trader.update_prices("RELIANCE.NS", 2460.00)   # TP hit
+    trader.update_prices("HDFCBANK.NS", 1664.00)   # SL hit
+    trader.update_prices("TCS.NS",      3904.00)   # TP hit
 
     trader.print_daily_report()
 
