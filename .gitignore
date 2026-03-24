@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+
+# Secrets & API keys
+.env.local
+*.env
+
+# Logs (keep .gitkeep, ignore generated logs)
+logs/*.log
+
+# Data (keep sample file and .gitkeep, ignore generated trade CSVs)
+data/paper_trades.csv
+data/trades.csv
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
