@@ -19,10 +19,11 @@ EOD_SQUAREOFF = "15:15"
 NO_NEW_TRADES_AFTER = "15:00"
 
 # ── ATR Multipliers for SL / TP ───────────────────────────────────────────────
-SL_ATR_MULTIPLIER = 2.0   # wider SL to survive intraday noise
-TP_ATR_MULTIPLIER = 1.0   # single TP — full position exits here
-MIN_SL_PCT = 0.004         # Minimum SL distance: 0.4% from entry
-MAX_SL_PCT = 0.010         # Maximum SL distance: 1.0% from entry
+SL_ATR_MULTIPLIER  = 2.0   # wider SL to survive intraday noise
+TP1_ATR_MULTIPLIER = 1.0   # partial TP: exit half position here (1×ATR)
+RR_TARGET          = 1.67  # risk-reward target: full TP = RR_TARGET × sl_dist
+MIN_SL_PCT         = 0.004 # Minimum SL distance: 0.4% from entry
+MAX_SL_PCT         = 0.010 # Maximum SL distance: 1.0% from entry
 
 MIN_COMPOSITE_SCORE = 0.60
 
