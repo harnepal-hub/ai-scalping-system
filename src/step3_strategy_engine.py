@@ -2,8 +2,8 @@
 Step 3 — Scalping Strategy Engine
 ====================================
 For each of the Top 5 scored stocks, calculates precise intraday trade
-parameters: Entry, Stop-Loss, Take-Profit 1, Take-Profit 2, Quantity,
-Max Loss, and Risk-Reward Ratio.
+parameters: Entry, Stop-Loss, Take-Profit, Quantity, Max Loss, and
+Risk-Reward Ratio.
 
 Capital rules:
   • Total Capital    : ₹1,00,000
@@ -12,9 +12,8 @@ Capital rules:
   • Max risk / trade : ₹1,000 (1% of capital)
 
 ATR-based SL/TP (5-min ATR):
-  • SL  = Entry ± 1.5 × ATR  (clamped to 0.3%–0.8% from entry)
-  • TP1 = Entry ± 1.0 × ATR  (book 50% qty)
-  • TP2 = Entry ± 2.5 × ATR  (book remaining 50% qty)
+  • SL = Entry ± 2.0 × ATR  (clamped to 0.4%–1.0% from entry)
+  • TP = Entry ± 1.0 × ATR  (full position exits here)
 
 Entry signal conditions (ALL must be true for LONG):
   1. Price breaks above ORB High (morning) or reclaims VWAP (afternoon)
@@ -42,8 +41,7 @@ try:
     from config.config import (
         CAPITAL_PER_STOCK,
         SL_ATR_MULTIPLIER,
-        TP1_ATR_MULTIPLIER,
-        TP2_ATR_MULTIPLIER,
+        TP_ATR_MULTIPLIER,
         MIN_SL_PCT,
         MAX_SL_PCT,
         RSI_LONG_MIN,
@@ -56,11 +54,10 @@ try:
     )
 except ModuleNotFoundError:
     CAPITAL_PER_STOCK = 20_000
-    SL_ATR_MULTIPLIER = 1.5
-    TP1_ATR_MULTIPLIER = 1.0
-    TP2_ATR_MULTIPLIER = 2.5
-    MIN_SL_PCT = 0.003
-    MAX_SL_PCT = 0.008
+    SL_ATR_MULTIPLIER = 2.0
+    TP_ATR_MULTIPLIER = 1.0
+    MIN_SL_PCT = 0.004
+    MAX_SL_PCT = 0.010
     RSI_LONG_MIN = 52
     RSI_LONG_MAX = 75
     RSI_SHORT_MIN = 25
@@ -105,16 +102,15 @@ def generate_trade_setup(stock: str,
     Returns
     -------
     dict
-        Keys: stock, direction, session, entry, sl, tp1, tp2,
-              qty, max_loss, rr_ratio, sl_pct, tp1_pct, tp2_pct.
+        Keys: stock, direction, session, entry, sl, tp,
+              qty, max_loss, rr_ratio, sl_pct, tp_pct.
     """
     direction = direction.upper()
     sign = 1 if direction == "LONG" else -1
 
     # ── SL / TP raw levels ───────────────────────────────────────────────────
     raw_sl_dist = SL_ATR_MULTIPLIER * atr
-    tp1_dist = TP1_ATR_MULTIPLIER * atr
-    tp2_dist = TP2_ATR_MULTIPLIER * atr
+    tp_dist = TP_ATR_MULTIPLIER * atr
 
     # Clamp SL distance to [MIN_SL_PCT, MAX_SL_PCT] of entry price
     min_sl_dist = MIN_SL_PCT * price
@@ -123,12 +119,10 @@ def generate_trade_setup(stock: str,
 
     if direction == "LONG":
         sl = price - sl_dist
-        tp1 = price + tp1_dist
-        tp2 = price + tp2_dist
+        tp = price + tp_dist
     else:
         sl = price + sl_dist
-        tp1 = price - tp1_dist
-        tp2 = price - tp2_dist
+        tp = price - tp_dist
 
     # ── Quantity ─────────────────────────────────────────────────────────────
     qty = max(1, math.floor(CAPITAL_PER_STOCK / price))
@@ -137,13 +131,11 @@ def generate_trade_setup(stock: str,
     max_loss = round(qty * sl_dist, 2)
 
     # ── Risk-Reward ───────────────────────────────────────────────────────────
-    reward = tp2_dist
-    rr_ratio = round(reward / sl_dist, 2) if sl_dist > 0 else 0.0
+    rr_ratio = round(tp_dist / sl_dist, 2) if sl_dist > 0 else 0.0
 
     # ── Percentage distances ─────────────────────────────────────────────────
     sl_pct = round(sl_dist / price * 100, 2)
-    tp1_pct = round(tp1_dist / price * 100, 2)
-    tp2_pct = round(tp2_dist / price * 100, 2)
+    tp_pct = round(tp_dist / price * 100, 2)
 
     setup = {
         "stock": stock,
@@ -151,20 +143,18 @@ def generate_trade_setup(stock: str,
         "session": session,
         "entry": round(price, 2),
         "sl": round(sl, 2),
-        "tp1": round(tp1, 2),
-        "tp2": round(tp2, 2),
+        "tp": round(tp, 2),
         "qty": qty,
         "max_loss": max_loss,
         "rr_ratio": rr_ratio,
         "sl_pct": sl_pct,
-        "tp1_pct": tp1_pct,
-        "tp2_pct": tp2_pct,
+        "tp_pct": tp_pct,
         "atr": round(atr, 4),
     }
 
     logger.info(
         f"Trade setup generated: {stock} {direction} "
-        f"Entry={price:.2f} SL={sl:.2f} TP1={tp1:.2f} TP2={tp2:.2f} Qty={qty}"
+        f"Entry={price:.2f} SL={sl:.2f} TP={tp:.2f} Qty={qty}"
     )
     return setup
 
@@ -298,15 +288,13 @@ def display_trade_card(trade_setup: dict) -> None:
     session = str(trade_setup.get("session", "MORNING")).upper()
     entry = float(trade_setup.get("entry", 0))
     sl = float(trade_setup.get("sl", 0))
-    tp1 = float(trade_setup.get("tp1", 0))
-    tp2 = float(trade_setup.get("tp2", 0))
+    tp = float(trade_setup.get("tp", 0))
     qty = int(trade_setup.get("qty", 0))
     max_loss = float(trade_setup.get("max_loss", 0))
     rr = float(trade_setup.get("rr_ratio", 0))
 
     sl_pct = trade_setup.get("sl_pct", abs(sl - entry) / entry * 100 if entry else 0)
-    tp1_pct = trade_setup.get("tp1_pct", abs(tp1 - entry) / entry * 100 if entry else 0)
-    tp2_pct = trade_setup.get("tp2_pct", abs(tp2 - entry) / entry * 100 if entry else 0)
+    tp_pct = trade_setup.get("tp_pct", abs(tp - entry) / entry * 100 if entry else 0)
 
     sl_sign = "-" if direction == "LONG" else "+"
     tp_sign = "+" if direction == "LONG" else "-"
@@ -324,14 +312,13 @@ def display_trade_card(trade_setup: dict) -> None:
     print(f"\n\u2554{'=' * inner_w}\u2557")
     print(f"\u2551{title_padded}\u2551")
     print(f"\u2560{'=' * inner_w}\u2563")
-    print(_row("Entry Price",   f"Rs {entry:>10,.2f}"))
-    print(_row("Stop Loss",     f"Rs {sl:>10,.2f}  ({sl_sign}{sl_pct:.2f}%)"))
-    print(_row("Take Profit 1", f"Rs {tp1:>10,.2f}  ({tp_sign}{tp1_pct:.2f}%)"))
-    print(_row("Take Profit 2", f"Rs {tp2:>10,.2f}  ({tp_sign}{tp2_pct:.2f}%)"))
-    print(_row("Quantity",      f"{qty} shares"))
-    print(_row("Max Loss",      f"Rs {max_loss:>10,.2f}"))
-    print(_row("Risk-Reward",   f"1 : {rr:.2f}"))
-    print(_row("Session",       session))
+    print(_row("Entry Price",  f"Rs {entry:>10,.2f}"))
+    print(_row("Stop Loss",    f"Rs {sl:>10,.2f}  ({sl_sign}{sl_pct:.2f}%)"))
+    print(_row("Take Profit",  f"Rs {tp:>10,.2f}  ({tp_sign}{tp_pct:.2f}%)"))
+    print(_row("Quantity",     f"{qty} shares"))
+    print(_row("Max Loss",     f"Rs {max_loss:>10,.2f}"))
+    print(_row("Risk-Reward",  f"1 : {rr:.2f}"))
+    print(_row("Session",      session))
     print(f"\u255a{'=' * inner_w}\u255d\n")
 
 
