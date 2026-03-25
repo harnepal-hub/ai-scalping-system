@@ -508,6 +508,12 @@ class PaperTrader:
             return
 
         df = pd.read_csv(filepath)
+        # Migrate old tp1/tp2 columns to single tp column
+        if "tp" not in df.columns:
+            if "tp2" in df.columns:
+                df["tp"] = df["tp2"]
+            elif "tp1" in df.columns:
+                df["tp"] = df["tp1"]
         # Align columns
         for col in TRADE_CSV_COLUMNS:
             if col not in df.columns:
