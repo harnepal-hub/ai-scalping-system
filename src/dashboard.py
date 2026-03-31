@@ -15,7 +15,7 @@ Run with:
 import sys
 import os
 from pathlib import Path
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
 
 import numpy as np
 import pandas as pd
@@ -39,6 +39,14 @@ except ImportError:
 DEFAULT_TRADE_CSV = os.path.join(
     os.path.dirname(__file__), "..", "data", "sample_trades.csv"
 )
+
+# ── IST timezone helper ────────────────────────────────────────────────────────
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _today_ist() -> date:
+    """Return the current date in IST (UTC+5:30)."""
+    return datetime.now(tz=_IST).date()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Data loading
@@ -74,7 +82,23 @@ def compute_metrics(df: pd.DataFrame, initial_capital: float = 100_000) -> dict:
 
     # Daily P&L
     daily = df.groupby("date")["net_pnl"].sum().reset_index()
-    daily["cumulative"] = daily["net_pnl"].cumsum() + initial_capital
+    # Determine actual starting capital from trade history (Bug 2 fix)
+    if "capital_after" in df.columns and "net_pnl" in df.columns:
+        first_valid = (
+            df.sort_values("exit_time", na_position="last")
+            .dropna(subset=["capital_after"])
+            .head(1)
+        )
+        if not first_valid.empty:
+            actual_starting_capital = (
+                float(first_valid["capital_after"].iloc[0])
+                - float(first_valid["net_pnl"].iloc[0])
+            )
+        else:
+            actual_starting_capital = initial_capital
+    else:
+        actual_starting_capital = initial_capital
+    daily["cumulative"] = daily["net_pnl"].cumsum() + actual_starting_capital
 
     # Sharpe Ratio (annualised, assuming 250 trading days)
     if len(daily) > 1:
@@ -228,7 +252,7 @@ def run_dashboard():
     st.markdown("---")
 
     # ── Today's Summary ────────────────────────────────────────────────────────
-    today = date.today()
+    today = _today_ist()
     today_df = df[df["date"] == today]
     st.markdown(f"#### 🗓️ Today's Trades ({today})")
     if today_df.empty:
