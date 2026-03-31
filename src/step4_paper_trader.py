@@ -22,7 +22,7 @@ import os
 import csv
 import math
 import warnings
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -30,6 +30,14 @@ import numpy as np
 import pandas as pd
 
 warnings.filterwarnings("ignore")
+
+# ── IST timezone helper ────────────────────────────────────────────────────────
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _today_ist() -> date:
+    """Return the current date in IST (UTC+5:30)."""
+    return datetime.now(tz=_IST).date()
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -206,7 +214,7 @@ class PaperTrader:
             "session": session,
             "state": STATE_OPEN,
             "entry_time": datetime.now(),
-            "date": date.today(),
+            "date": _today_ist(),
             "composite_score": composite_score,
             "atr": atr,
             "rr_ratio": rr_ratio,
@@ -367,7 +375,7 @@ class PaperTrader:
             capital, win rate, and individual trade rows.
         """
         if trade_date is None:
-            trade_date = str(date.today())
+            trade_date = str(_today_ist())
 
         day_trades = [
             t for t in self.closed_trades if t["date"] == trade_date
@@ -478,7 +486,8 @@ class PaperTrader:
 
     def save_to_csv(self, filepath: str) -> None:
         """
-        Save all closed trades to a CSV file.
+        Append today's new closed trades to the CSV, avoiding duplicates.
+        Existing rows are preserved; only trades not already present are written.
 
         Parameters
         ----------
@@ -490,9 +499,35 @@ class PaperTrader:
             return
 
         Path(filepath).parent.mkdir(parents=True, exist_ok=True)
-        df = pd.DataFrame(self.closed_trades)[TRADE_CSV_COLUMNS]
-        df.to_csv(filepath, index=False)
-        logger.info(f"Saved {len(df)} trades to {filepath}")
+        new_df = pd.DataFrame(self.closed_trades)[TRADE_CSV_COLUMNS]
+
+        if Path(filepath).exists():
+            existing_df = pd.read_csv(filepath)
+            # Normalise date strings to prevent type mismatch duplicates
+            existing_df["date"] = pd.to_datetime(
+                existing_df["date"], errors="coerce"
+            ).dt.strftime("%Y-%m-%d")
+            new_df["date"] = pd.to_datetime(
+                new_df["date"], errors="coerce"
+            ).dt.strftime("%Y-%m-%d")
+            # Deduplicate on natural key: date + stock + entry_time
+            key_cols = ["date", "stock", "entry_time"]
+            merged = new_df.merge(
+                existing_df[key_cols], on=key_cols, how="left", indicator=True
+            )
+            truly_new = new_df[merged["_merge"] == "left_only"]
+            if truly_new.empty:
+                logger.info("No new trades to append (all already saved).")
+                return
+            combined = pd.concat([existing_df, truly_new], ignore_index=True)
+        else:
+            combined = new_df
+
+        combined.to_csv(filepath, index=False)
+        logger.info(
+            f"Saved {len(combined)} total trades to {filepath} "
+            f"({len(new_df)} new today)"
+        )
 
     def load_history(self, filepath: str) -> None:
         """
@@ -508,12 +543,18 @@ class PaperTrader:
             return
 
         df = pd.read_csv(filepath)
-        # Migrate old tp1/tp2 columns to single tp column
-        if "tp" not in df.columns:
+        # Migrate old tp1/tp2 columns to single tp column, with safety fallback
+        if "tp" not in df.columns or df["tp"].isna().all():
             if "tp2" in df.columns:
                 df["tp"] = df["tp2"]
             elif "tp1" in df.columns:
                 df["tp"] = df["tp1"]
+            else:
+                df["tp"] = df.get("entry_price", 0)
+        # Coerce tp to numeric to prevent string comparison issues
+        df["tp"] = pd.to_numeric(df["tp"], errors="coerce").fillna(0)
+        # Bug 1: normalise date column to plain YYYY-MM-DD strings
+        df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
         # Align columns
         for col in TRADE_CSV_COLUMNS:
             if col not in df.columns:
